@@ -1,0 +1,16 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color-scheme: light dark;
+  --page-padding: 2rem;
+  --content-width: 48rem;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: var(--content-width);
+  margin: auto;
+  padding: var(--page-padding);
+}
