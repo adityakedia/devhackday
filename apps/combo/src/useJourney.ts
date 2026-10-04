@@ -9,6 +9,7 @@ export function useJourney(mode: Mode) {
   const queues = useRef<Record<Mode, Promise<void>>>({ planning: Promise.resolve(), reflection: Promise.resolve() });
   const timers = useRef<Partial<Record<Mode, ReturnType<typeof setTimeout>>>>({});
   const generations = useRef({ planning: 0, reflection: 0 });
+  const queuedCounts = useRef({ planning: 0, reflection: 0 });
   const [pending, setPending] = useState({ planning: 0, reflection: 0 });
   const [aiPending, setAiPending] = useState({ planning: false, reflection: false });
   const [errors, setErrors] = useState<Partial<Record<Mode, string>>>({});
@@ -41,7 +42,8 @@ export function useJourney(mode: Mode) {
     const generation = ++generations.current[target];
     timers.current[target] = setTimeout(async () => {
       const base = current.current[target];
-      if (!base?.fragments.length || base.feedback.interpretationStatus === "current") return;
+      if (!base?.fragments.length) return;
+      if (base.feedback.interpretationStatus === "current" && base.interpretation?.readings.every((reading) => reading.experience)) return;
       setAiPending((old) => ({ ...old, [target]: true }));
       try {
         const next = await journeyApi.interpret(base.id, base.revision, "ai");
@@ -54,20 +56,24 @@ export function useJourney(mode: Mode) {
     }, 1000);
   }
 
-  async function write(target: Mode, action: JourneyAction) {
+  async function commit(target: Mode, operation: (base: JourneyResponse) => Promise<JourneyResponse>, retryInterpretation = true) {
     const base = await ensure(target);
     try {
-      return accept(await journeyApi.action(base.id, base.revision, action));
+      return accept(await operation(base));
     } catch (error) {
       if (error instanceof JourneyApiError && error.status === 409) {
         const latest = accept(await journeyApi.get(base.id));
         // A concurrent AI refresh changes revision without changing the collection.
-        if (action.type !== "choose_reading" && latest.events.length === base.events.length) {
-          return accept(await journeyApi.action(latest.id, latest.revision, action));
+        if (retryInterpretation && latest.events.length === base.events.length) {
+          return accept(await operation(latest));
         }
       }
       throw error;
     }
+  }
+
+  function write(target: Mode, action: JourneyAction) {
+    return commit(target, (base) => journeyApi.action(base.id, base.revision, action), action.type !== "choose_reading");
   }
 
   function enqueue(work: (session: JourneyResponse, writeAction: (action: JourneyAction) => Promise<JourneyResponse>) => Promise<void>, target: Mode = mode) {
@@ -76,11 +82,13 @@ export function useJourney(mode: Mode) {
     setAiPending((old) => ({ ...old, [target]: false }));
     setErrors((old) => ({ ...old, [target]: undefined }));
     setPending((old) => ({ ...old, [target]: old[target] + 1 }));
+    queuedCounts.current[target] += 1;
     queues.current[target] = queues.current[target].then(async () => {
       await work(await ensure(target), (action) => write(target, action));
     }).catch((error) => fail(target, error)).finally(() => {
       setPending((old) => ({ ...old, [target]: old[target] - 1 }));
-      scheduleInterpretation(target);
+      queuedCounts.current[target] -= 1;
+      if (queuedCounts.current[target] === 0) scheduleInterpretation(target);
     });
     return queues.current[target];
   }
@@ -99,5 +107,5 @@ export function useJourney(mode: Mode) {
     };
   }, []);
 
-  return { sessions, session: sessions[mode] ?? null, busy: pending[mode] > 0 || !sessions[mode], aiPending: aiPending[mode], error: errors[mode] ?? null, enqueue, accept, getCurrent: (target: Mode) => current.current[target] };
+  return { sessions, session: sessions[mode] ?? null, busy: pending[mode] > 0 || !sessions[mode], aiPending: aiPending[mode], error: errors[mode] ?? null, enqueue, accept, commit: (operation: (base: JourneyResponse) => Promise<JourneyResponse>, target: Mode = mode) => commit(target, operation), getCurrent: (target: Mode) => current.current[target] };
 }

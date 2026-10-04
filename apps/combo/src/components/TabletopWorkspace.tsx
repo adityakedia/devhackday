@@ -14,6 +14,7 @@ type Props = {
   aiPending: boolean;
   error: string | null;
   narrative: string;
+  narrativeStale: boolean;
   onNote: (id: string, note: string) => void;
   onPin: (id: string, pinned: boolean) => void;
   onChooseReading: (id: string) => void;
@@ -40,6 +41,8 @@ export function TabletopWorkspace(props: Props) {
   const [openedId, setOpenedId] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [memory, setMemory] = useState("");
+  const [memoryPrompt, setMemoryPrompt] = useState("");
+  const [evidenceIds, setEvidenceIds] = useState<string[]>([]);
   const [saveName, setSaveName] = useState("");
   const closeButton = useRef<HTMLButtonElement>(null);
   const object = props.objects.find((entry) => entry.id === openedId) ?? props.objects.find((entry) => entry.modelId === openedId);
@@ -51,11 +54,12 @@ export function TabletopWorkspace(props: Props) {
   const currentInterpretation = props.session?.interpretation?.revision === props.session?.revision ? props.session?.interpretation : null;
   const reading = currentInterpretation?.readings.find((entry) => entry.id === props.session?.chosenReading?.id) ?? currentInterpretation?.readings[0];
   const emerging = reading ?? feedback?.emergingReading;
+  const experience = reading?.experience;
   const connections = [...(feedback?.connections ?? []), ...(reading?.connections ?? []).map((connection) => ({ ...connection, kind: "reading", title: "In this reading" }))];
   const itemConnections = connections.filter((entry) => entry.fragmentIds.includes(object?.id ?? ""));
   const canGenerate = Boolean(currentInterpretation?.readings.some((entry) => entry.id === props.session?.chosenReading?.id));
-  useEffect(() => { setNote(fragment?.note ?? ""); }, [object?.id, fragment?.note]);
-  useEffect(() => { setOpenedId(null); setMemory(""); setSaveName(""); }, [props.mode]);
+  useEffect(() => { setNote(fragment?.note ?? ""); }, [object?.modelId, isMemory ? object?.id : null, fragment?.note ?? ""]);
+  useEffect(() => { setOpenedId(null); setMemory(""); setMemoryPrompt(""); setSaveName(""); setEvidenceIds([]); }, [props.mode]);
   const itinerary = props.objects.filter((entry) => entry.inCollection);
 
   function closePanel() {
@@ -65,6 +69,7 @@ export function TabletopWorkspace(props: Props) {
   }
 
   function inspect(id: string) {
+    setEvidenceIds([]);
     props.onCloseItinerary();
     setOpenedId(id);
   }
@@ -81,41 +86,56 @@ export function TabletopWorkspace(props: Props) {
   }, [openedId, props.itineraryOpen]);
 
   function selectEvidence(ids: string[]) {
+    setEvidenceIds(ids);
     const match = ids.find((id) => props.objects.some((entry) => entry.id === id));
     if (match) props.onSelect(match);
   }
 
   return <main className="tabletop-workspace" aria-label="Interactive shared souvenir table">
-    <Tabletop3D objects={props.objects} selectedId={props.selectedId} onMove={props.onMove} onSelect={props.onSelect} onInspect={inspect} />
+    <Tabletop3D objects={props.objects} selectedId={props.selectedId} highlightedIds={evidenceIds} onMove={props.onMove} onSelect={(id) => { setEvidenceIds([]); props.onSelect(id); }} onInspect={inspect} />
+    {/* Keep the table free of floating controls and status messages. */}
     {props.itineraryOpen && <aside id="itinerary-panel" className="souvenir-panel" aria-label={props.mode === "planning" ? "Your journey taking shape" : "Your remembered journey"}>
       <div className="souvenir-panel-top"><span className="eyebrow">YOUR JOURNEY</span><button ref={closeButton} className="icon-button" aria-label="Close itinerary" onClick={closePanel}><Icon name="close" /></button></div>
       <h2>{props.mode === "planning" ? "Your journey taking shape" : "Your remembered journey"}</h2>
+      <div className="journey-mode-control" aria-label="Journey mode"><button className="journey-text-button" aria-pressed={props.mode === "planning"} onClick={() => props.onMode("planning")}>Imagine</button><button className="journey-text-button" aria-pressed={props.mode === "reflection"} onClick={() => props.onMode("reflection")}>Remember</button></div>
       {emerging && itinerary.length > 0 && <section className="journey-section">
         <h3>The emerging thread</h3><h4>{emerging.title}</h4><p>{emerging.summary}</p>
         {reading && props.session?.chosenReading?.id !== reading.id && <button className="journey-text-button" disabled={props.busy} onClick={() => props.onChooseReading(reading.id)}>This feels right</button>}
       </section>}
-      <p className="souvenir-panel-description">{itinerary.length ? "The objects and experiences you’ve added to your journey." : "Drag a souvenir into the tray, or choose Add to itinerary in its details, to start your journey."}</p>
-      <ol className="itinerary-list">
-        {itinerary.map((entry, index) => {
+      {experience && <section className="journey-section">
+        <h3>{props.mode === "planning" ? "A suggested experience" : "A sequence of remembered themes"}</h3>
+        <h4>{experience.title}</h4><p>{experience.summary}</p>
+        <ol className="itinerary-list">{experience.steps.map((step, index) => <li className="itinerary-item" key={index}>
+          <span className="itinerary-number">{String(index + 1).padStart(2, "0")}</span>
+          <div><button className="itinerary-item-title" onClick={() => selectEvidence(step.fragmentIds)}>{step.title}</button><p>{step.description}</p>
+            {step.fragmentIds.map((id) => { const entry = itinerary.find((item) => item.id === id); return entry ? <button className="journey-text-button" key={id} onClick={() => inspect(id)}>{entry.label}</button> : null; })}
+          </div>
+        </li>)}</ol>
+      </section>}
+      {!experience && itinerary.length > 0 && <p className="journey-hint">Your choices are being woven into a curated experience.</p>}
+      <p className="souvenir-panel-description">{itinerary.length ? "The objects behind your journey." : "Drag a souvenir into the tray, or choose Add to itinerary in its details, to start your journey."}</p>
+      <details className="journey-section"><summary>Collected objects ({itinerary.length})</summary>
+      <ul className="itinerary-list">
+        {[...itinerary].sort((a, b) => a.label.localeCompare(b.label)).map((entry) => {
           const model = souvenirs.find((candidate) => candidate.id === entry.modelId);
           return <li className="itinerary-item" key={entry.id}>
-            <span className="itinerary-number">{String(index + 1).padStart(2, "0")}</span>
+            <span className="itinerary-number"><Icon name="bag" /></span>
             <div><button className="itinerary-item-title" onClick={() => inspect(entry.id)}>{entry.label}</button>{model && props.session?.fragments.find((fragment) => fragment.id === entry.id)?.objectId !== null && <p className="souvenir-panel-origin">{model.origin}</p>}</div>
             <button className="icon-button" aria-label={`Remove ${entry.label} from itinerary`} disabled={props.busy} onClick={() => { const position = initialTablePosition(souvenirs.findIndex((candidate) => candidate.id === entry.modelId)); props.onMove(entry.id, position.x, position.z, false); }}><Icon name="close" /></button>
           </li>;
         })}
-      </ol>
+      </ul></details>
       {connections.length > 0 && <section className="journey-section"><h3>Connections</h3>{connections.map((connection, index) => <button className="journey-connection" key={`${connection.kind}-${index}`} onClick={() => selectEvidence(connection.fragmentIds)}><strong>{connection.title}</strong><span>{connection.explanation}</span></button>)}</section>}
-      {feedback?.suggestedMoves.length ? <section className="journey-section"><h3>Explore next</h3>{feedback.suggestedMoves.slice(0, 3).map((suggestion) => <button className="journey-connection" key={suggestion.id} onClick={() => {
+      {feedback?.suggestedMoves.length ? <section className="journey-section"><h3>Explore next</h3>{currentInterpretation?.nextPrompt && <p>{currentInterpretation.nextPrompt}</p>}{feedback.suggestedMoves.slice(0, 3).map((suggestion) => <button className="journey-connection" key={suggestion.id} onClick={() => {
         if (suggestion.objectId) {
           const match = props.objects.find((entry) => entry.modelId === suggestion.objectId);
           if (match) { props.onSelect(match.id); inspect(match.id); }
-        } else setMemory(suggestion.prompt);
+        } else setMemoryPrompt(suggestion.prompt);
       }}><strong>{suggestion.prompt}</strong><span>{suggestion.explanation}</span></button>)}</section> : null}
       {currentInterpretation && <details className="journey-section"><summary>Other possible readings</summary>{currentInterpretation.readings.map((alternative) => <button className="journey-connection" key={alternative.id} disabled={props.busy} aria-pressed={props.session?.chosenReading?.id === alternative.id} onClick={() => props.onChooseReading(alternative.id)}><strong>{alternative.title}</strong><span>{alternative.summary}</span><span>{props.session?.chosenReading?.id === alternative.id ? "Your chosen reading" : "This feels right"}</span></button>)}</details>}
-      {props.mode === "reflection" && <section className="journey-section"><label htmlFor="journey-memory">A moment you remember</label><textarea id="journey-memory" value={memory} onChange={(event) => setMemory(event.target.value)} placeholder="A place, a person, a little moment…" /><button className="journey-text-button" disabled={props.busy || !memory.trim()} onClick={() => props.onMemory(memory.trim())}>Keep this memory</button></section>}
+      {props.mode === "reflection" && <section className="journey-section"><label htmlFor="journey-memory">A moment you remember</label>{memoryPrompt && <p>{memoryPrompt}</p>}<textarea id="journey-memory" value={memory} onChange={(event) => setMemory(event.target.value)} placeholder="A place, a person, a little moment…" /><button className="journey-text-button" disabled={props.busy || !memory.trim()} onClick={() => props.onMemory(memory.trim())}>Keep this memory</button></section>}
       {itinerary.length > 0 && <section className="journey-section"><h3>Your story</h3><button className="journey-text-button" disabled={props.busy || props.aiPending || !canGenerate} onClick={props.onNarrative}>{props.narrative ? "Compose again" : "Compose your story"}</button>{!canGenerate && <p className="journey-hint">Choose a current reading to compose your story.</p>}
-        {props.narrative && <><label htmlFor="journey-story">Make the story yours</label><textarea id="journey-story" className="journey-story" value={props.narrative} onChange={(event) => props.onNarrativeEdit(event.target.value)} /><label htmlFor="journey-save-name">Collection name</label><input id="journey-save-name" value={saveName} onChange={(event) => setSaveName(event.target.value)} placeholder="Give this journey a name" /><button className="primary-button" disabled={props.busy || !saveName.trim()} onClick={() => props.onSave(saveName.trim())}>Keep this collection</button></>}
+        {props.narrative && <>{props.narrativeStale && <p className="journey-hint">Your choices changed. Compose again or edit your story to reflect them before saving.</p>}<label htmlFor="journey-story">Make the story yours</label><textarea id="journey-story" className="journey-story" value={props.narrative} onChange={(event) => props.onNarrativeEdit(event.target.value)} /><label htmlFor="journey-save-name">Collection name</label><input id="journey-save-name" value={saveName} onChange={(event) => setSaveName(event.target.value)} placeholder="Give this journey a name" /><button className="primary-button" disabled={props.busy || props.narrativeStale || !saveName.trim()} onClick={() => props.onSave(saveName.trim())}>Keep this collection</button></>}
       </section>}
     </aside>}
     {!props.itineraryOpen && object && <aside className="souvenir-panel" aria-label={`Details for ${object.label}`}>

@@ -33,6 +33,34 @@ function explainChange(session: JourneySession): string {
   }
 }
 
+function thematicExperience(session: JourneySession, reading: Reading): NonNullable<Reading["experience"]> {
+  const included = new Set<string>();
+  const steps: NonNullable<Reading["experience"]>["steps"] = [];
+  const sorted = [...session.fragments].sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
+  for (const group of [...session.clusters].sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id))) {
+    const members = sorted.filter((fragment) => group.fragmentIds.includes(fragment.id) && !included.has(fragment.id));
+    if (!members.length) continue;
+    members.forEach((fragment) => included.add(fragment.id));
+    steps.push({
+      title: group.label || "Your connection",
+      description: `Consider ${members.map((fragment) => `“${fragment.label}”`).join(" and ")} together through the relationship you named${group.label ? ` “${group.label}”` : ""}. ${members.filter((fragment) => fragment.note.trim()).map((fragment) => `Your note on “${fragment.label}”: “${fragment.note}”.`).join(" ")}`.trim(),
+      fragmentIds: members.map((fragment) => fragment.id),
+    });
+  }
+  for (const fragment of sorted.filter((entry) => !included.has(entry.id))) {
+    steps.push({
+      title: fragment.label,
+      description: `${session.mode === "planning" ? "Explore what this artifact could mean for the journey ahead." : "Reflect on what this artifact brings back, without assuming an event or chronology."}${fragment.pinned ? " You chose to keep it central." : ""}${fragment.note.trim() ? ` Your note: “${fragment.note}”.` : ""}`,
+      fragmentIds: [fragment.id],
+    });
+  }
+  return {
+    title: reading.title,
+    summary: "Begin with the relationships you grouped, then consider the remaining artifacts by label. This is a thematic outline to develop in your own words, rather than a travel schedule or remembered chronology.",
+    steps,
+  };
+}
+
 export function interpretMetadata(session: JourneySession): Interpretation {
   const relationships = summarizeRelationships(session);
   const feedback = buildFeedback(session);
@@ -75,6 +103,7 @@ export function interpretMetadata(session: JourneySession): Interpretation {
       });
     }
   }
+  for (const reading of readings) reading.experience = thematicExperience(session, reading);
   return {
     revision: session.revision, mode: session.mode, engine: "metadata", readings,
     deltaExplanation: explainChange(session),

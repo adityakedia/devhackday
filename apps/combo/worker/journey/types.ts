@@ -44,6 +44,11 @@ export interface Reading {
   summary: string;
   supportingFragmentIds: string[];
   connections: { fragmentIds: string[]; explanation: string }[];
+  experience?: {
+    title: string;
+    summary: string;
+    steps: { title: string; description: string; fragmentIds: string[] }[];
+  };
 }
 
 export interface Interpretation {

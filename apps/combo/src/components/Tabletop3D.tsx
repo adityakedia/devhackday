@@ -19,6 +19,7 @@ export type TableObject = {
 type Props = {
   objects: TableObject[];
   selectedId: string | null;
+  highlightedIds?: string[];
   onMove: (id: string, x: number, z: number, inCollection: boolean) => void;
   onSelect: (id: string) => void;
   onInspect: (id: string) => void;
@@ -202,8 +203,8 @@ export function Tabletop3D(props: Props) {
     controls.saveState();
     const haptic = () => { if ('vibrate' in navigator) navigator.vibrate(8); };
     const isDragged = (id: string) => [...drags.values()].some((drag) => drag.id === id);
-    const groundHeight = (z: number) => z > 0.7 ? 0.15 : 0.012;
-    const clamp = (x: number, z: number) => ({ x: THREE.MathUtils.clamp(x, z > 0.7 ? -4.4 : -5.55, z > 0.7 ? 4.4 : 5.55), z: z > 0.7 ? THREE.MathUtils.clamp(z, 1.45, 2.85) : THREE.MathUtils.clamp(z, -5.5, 0.7) });
+    const inTray = (x: number, z: number) => Math.abs(x) <= 5.05 && z >= 1.05 && z <= 3.35;
+    const groundHeight = (x: number, z: number) => inTray(x, z) ? 0.15 : 0.012;
 
     function sync() {
       const next = current.current;
@@ -239,7 +240,7 @@ export function Tabletop3D(props: Props) {
           halo.rotation.x = -Math.PI / 2;
           halo.position.y = 0.002;
           root.add(halo);
-          root.position.set(data.x, groundHeight(data.z), data.z);
+          root.position.set(data.x, groundHeight(data.x, data.z), data.z);
           display = { root, modelId: data.modelId, halo, data, lift: 0 };
           displays.set(data.id, display);
           scene.add(root);
@@ -249,7 +250,7 @@ export function Tabletop3D(props: Props) {
           display.root.position.x = data.x;
           display.root.position.z = data.z;
         }
-        const selected = next.selectedId === data.id;
+        const selected = next.selectedId === data.id || Boolean(next.highlightedIds?.includes(data.id));
         display.halo.visible = selected || Boolean(data.group) || data.locked;
         display.halo.material.color.set(theme.getPropertyValue(selected ? '--jade' : data.locked ? '--vermilion' : data.group === 'one' ? '--jade-selected' : '--muted').trim());
         display.halo.material.opacity = selected ? 0.8 : 0.4;
@@ -306,9 +307,8 @@ export function Tabletop3D(props: Props) {
       const display = displays.get(drag.id);
       const point = raycaster.ray.intersectPlane(plane, new THREE.Vector3());
       if (!display || !point) return;
-      const position = clamp(point.x + drag.offset.x, point.z + drag.offset.z);
-      display.root.position.x = position.x;
-      display.root.position.z = position.z;
+      display.root.position.x = point.x + drag.offset.x;
+      display.root.position.z = point.z + drag.offset.z;
     }
     function pointerUp(event: PointerEvent) {
       const drag = drags.get(event.pointerId);
@@ -327,7 +327,7 @@ export function Tabletop3D(props: Props) {
           current.current.onInspect(drag.id);
         } else {
           const { x, z } = display.root.position;
-          current.current.onMove(drag.id, x, z, z > 0.7);
+          current.current.onMove(drag.id, x, z, inTray(x, z));
           haptic();
         }
       }
@@ -344,8 +344,9 @@ export function Tabletop3D(props: Props) {
       const display = displays.get(id);
       if (!step || !display) return;
       event.preventDefault();
-      const position = clamp(display.root.position.x + step[0], display.root.position.z + step[1]);
-      current.current.onMove(id, position.x, position.z, position.z > 0.7);
+      const x = display.root.position.x + step[0];
+      const z = display.root.position.z + step[1];
+      current.current.onMove(id, x, z, inTray(x, z));
     }
     const pointerLeave = () => { if (!drags.size) canvas.classList.remove('is-hovering'); };
     canvas.addEventListener('pointerdown', pointerDown, true);
@@ -374,9 +375,9 @@ export function Tabletop3D(props: Props) {
       const delta = Math.min((time - previous) / 1000, 0.05);
       previous = time;
       for (const display of displays.values()) {
-        const target = groundHeight(display.root.position.z) + display.lift;
+        const target = groundHeight(display.root.position.x, display.root.position.z) + display.lift;
         display.root.position.y = reducedMotion ? target : THREE.MathUtils.damp(display.root.position.y, target, 16, delta);
-        display.halo.position.y = 0.002 - (display.root.position.y - groundHeight(display.root.position.z));
+        display.halo.position.y = 0.002 - (display.root.position.y - groundHeight(display.root.position.x, display.root.position.z));
       }
       if (controls.enabled) controls.update();
       renderer.render(scene, camera);
@@ -404,7 +405,7 @@ export function Tabletop3D(props: Props) {
     };
   }, []);
 
-  useEffect(() => { runtime.current?.sync(); }, [props.objects, props.selectedId]);
+  useEffect(() => { runtime.current?.sync(); }, [props.objects, props.selectedId, props.highlightedIds]);
 
   return <div className="tt-scene">
     <div className="tt-canvas" ref={host} />

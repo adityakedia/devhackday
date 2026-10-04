@@ -1,6 +1,6 @@
 # Combo journey backend
 
-Backend implementation only. The frontend and 3D viewer are not connected to these endpoints.
+The root journey frontend now calls these endpoints through `shared/journey-api.ts` and `src/useJourney.ts`. The separate `/souvenirs` asset viewer remains independent.
 
 ## Setup
 
@@ -12,7 +12,7 @@ For AI requests, also configure `OPENAI_API_KEY` and `OPENAI_MODEL`. The selecte
 
 - `worker/journey/types.ts`: session, actions, readings, narrative, and snapshot contracts.
 - `shared/souvenir-catalog.ts`: the 43 current tabletop souvenirs, preserving model IDs, labels, descriptions, kinds, invitations and tags. The frontend tabletop and backend `catalog.ts` import this same plain metadata; no Three.js dependencies reach the Worker. Authored combination rules match kinds while suggestions retain specific souvenir IDs.
-- `shared/journey-api.ts`: typed, headless API functions for frontend integration; it does not mount UI, schedule AI or store client state.
+- `shared/journey-api.ts`: typed API functions. `src/useJourney.ts` owns per-mode sessions, serialized actions, revision reconciliation and a one-second AI debounce after queued choices settle. Session IDs are retained in this browser; state and snapshots are stored in Neon.
 - `state.ts`: immutable collection actions, groups, pins, preferred reading, revisions, and snapshot save/restore.
 - `meaning.ts`: relationship summaries, basic metadata readings, action explanations, and curated surprises.
 - `feedback.ts`: current choice weights, combination relationships, immediate readings, change feedback, and ranked next moves.
@@ -37,10 +37,14 @@ Create, fetch, and mutation responses retain the session fields and add a derive
 
 The AI interpretation now also returns `contextualThemes`, assigning catalog-vocabulary themes from each fragment's own note. These can replace the object's generic associations and rerank suggestions. For example, a cup described as a reminder of a loud market evening can contribute evening/energy themes instead of slow-morning themes. The server stamps each assignment with the source note; editing that note makes the old assignment inapplicable. Until AI refreshes, immediate hints use available catalog associations and remain provisional. Labels/groups guide relationships and narrative, while per-fragment semantic tags are grounded in the fragment's own note. This deliberately uses the small catalog vocabulary rather than a generalized semantic search system.
 
-Client integration, when requested, should work in two stages:
+The client integration works in two stages:
 
 1. Submit `/actions` and render its `feedback` immediately, without waiting for AI.
 2. Once choices settle, request `/interpret` with `engine: "ai"` and the latest revision. Render its evidence-linked readings and newly ranked suggestions. If the collection changed while AI ran, the conditional commit returns `409`; use the newer collection and request a fresh interpretation when appropriate.
+
+Each AI reading now returns `experience: { title, summary, steps: [{ title, description, fragmentIds }] }`. Steps curate the whole collection into a meaningful sequence, explaining transitions and combining related objects rather than following addition order. Planning proposes experiences without fabricated bookings/times or route optimization; reflection organizes supplied memories into themes without invented chronology. Metadata interpretation supplies a simple grouped thematic outline. Older stored readings may omit experience; the frontend refreshes them when loaded.
+
+The journey panel shows that curated flow, alternate readings, connections, suggestions and editable narrative. Its collected-object list is separate and unnumbered. The item panel commits personal notes and pins, and connections highlight supporting objects on the table. A quiet status strip reports choice feedback, AI progress and failures. Meaning-changing choices mark an existing story for revision; the text remains editable, but saving requires regenerating or editing it. Save/restore uses server snapshots including placements and contributor labels. No integration validation, browser checks or deployment were run for this change.
 
 The backend does not automatically call AI on every action or run a background debounce timer. The client schedules that separate refresh. No streaming or WebSocket integration was added. Save/restore includes the contextual themes; stale-note matching still applies to restored data.
 

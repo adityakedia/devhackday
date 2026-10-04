@@ -34,17 +34,20 @@ function savedCollection(session: JourneyResponse, snapshot: SavedState): SavedC
 }
 
 async function syncGroups(session: JourneyResponse, write: (action: JourneyAction) => Promise<JourneyResponse>) {
+  let changed = false;
   const positions = Object.fromEntries(session.fragments.map((fragment, index) => [fragment.id, fragment.placement ?? trayPosition(index)]));
   const grouped = assignProximityGroups(collectionItems(session), positions);
   for (const id of ["one", "two"]) {
     const fragmentIds = grouped.filter((fragment) => fragment.group === id).map((fragment) => fragment.id);
     const existing = session.clusters.find((cluster) => cluster.id === id);
     if (!fragmentIds.length) {
-      if (existing) session = await write({ type: "ungroup", clusterId: id });
+      if (existing) { session = await write({ type: "ungroup", clusterId: id }); changed = true; }
     } else if (!existing || [...existing.fragmentIds].sort().join() !== [...fragmentIds].sort().join()) {
       session = await write({ type: "group", clusterId: id, label: existing?.label ?? "Objects placed together", fragmentIds });
+      changed = true;
     }
   }
+  return changed;
 }
 
 function trayPosition(index: number): Placement {
@@ -60,6 +63,7 @@ export default function JourneyApp() {
   const [itineraryOpen, setItineraryOpen] = useState(false);
   const [positions, setPositions] = useState<Record<Mode, Record<string, Placement>>>({ planning: {}, reflection: {} });
   const [drafts, setDrafts] = useState<Record<Mode, string>>({ planning: "", reflection: "" });
+  const [storyStale, setStoryStale] = useState({ planning: false, reflection: false });
   const items = session ? collectionItems(session) : [];
   const saved = Object.values(journey.sessions).filter((state): state is JourneyResponse => Boolean(state)).flatMap((state) => state.savedStates.map((snapshot) => savedCollection(state, snapshot)));
   const selectedObjects = new Set(session?.fragments.map((fragment) => fragment.objectId));
@@ -83,10 +87,10 @@ export default function JourneyApp() {
 
   function move(id: string, x: number, z: number, inCollection: boolean) {
     const target = mode;
+    const object = objects.find((entry) => entry.id === id);
     setSelectedId(id);
-    setPositions((old) => ({ ...old, [target]: { ...old[target], [id]: { x, z } } }));
-    const knownFragment = session?.fragments.find((fragment) => fragment.id === id);
-    if (!inCollection && !knownFragment) return;
+    setPositions((old) => ({ ...old, [target]: { ...old[target], [id]: { x, z }, ...(object && !inCollection ? { [object.modelId]: { x, z } } : {}) } }));
+    if (!inCollection && !object?.inCollection) return;
     void journey.enqueue(async (base, write) => {
       const fragment = base.fragments.find((entry) => entry.id === id || entry.objectId === id);
       let next: JourneyResponse;
@@ -100,27 +104,29 @@ export default function JourneyApp() {
         const collected = next.fragments.find((entry) => !base.fragments.some((previous) => previous.id === entry.id));
         if (collected) setSelectedId((selected) => selected === id ? collected.id : selected);
       }
-      await syncGroups(next, write);
-    }).then(() => setPositions((old) => {
-      if (old[target][id]?.x !== x || old[target][id]?.z !== z) return old;
-      return { ...old, [target]: Object.fromEntries(Object.entries(old[target]).filter(([key]) => key !== id)) };
-    }));
+      const groupChanged = await syncGroups(next, write);
+      if (!fragment || !inCollection || groupChanged) setStoryStale((old) => ({ ...old, [target]: true }));
+    });
   }
 
   function keepNote(id: string, note: string) {
+    const target = mode;
     void journey.enqueue(async (base, write) => {
       const fragment = base.fragments.find((entry) => entry.id === id || entry.objectId === id);
       const next = fragment
         ? await write({ type: "annotate", fragmentId: fragment.id, note })
         : await write({ type: "collect", objectId: id, note, placement: trayPosition(base.fragments.length), owner: "You" });
       await syncGroups(next, write);
+      setStoryStale((old) => ({ ...old, [target]: true }));
     });
   }
 
   function addMemory(note: string) {
+    const target = mode;
     void journey.enqueue(async (base, write) => {
       const next = await write({ type: "add_memory", label: note.slice(0, 42), note, placement: trayPosition(base.fragments.length), owner: "You" });
       await syncGroups(next, write);
+      setStoryStale((old) => ({ ...old, [target]: true }));
     });
   }
 
@@ -129,24 +135,27 @@ export default function JourneyApp() {
     const originalDraft = drafts[target];
     void journey.enqueue(async (base) => {
       const narrative = await journeyApi.narrative(base.id, base.revision, "ai");
-      if (journey.getCurrent(target)?.revision === base.revision) setDrafts((old) => old[target] === originalDraft ? { ...old, [target]: narrative.text } : old);
+      if (journey.getCurrent(target)?.revision === base.revision) {
+        setDrafts((old) => old[target] === originalDraft ? { ...old, [target]: narrative.text } : old);
+        setStoryStale((old) => ({ ...old, [target]: false }));
+      }
     });
   }
 
   function save(name: string) {
     const target = mode;
-    void journey.enqueue(async (base) => {
-      journey.accept(await journeyApi.save(base.id, base.revision, name, drafts[target]));
+    void journey.enqueue(async () => {
+      await journey.commit((base) => journeyApi.save(base.id, base.revision, name, drafts[target]), target);
     });
   }
 
   function openCollection(collection: SavedCollection) {
     start(collection.mode);
-    void journey.enqueue(async (base) => {
-      const next = await journeyApi.restore(base.id, base.revision, collection.id);
-      journey.accept(next);
+    void journey.enqueue(async () => {
+      await journey.commit((base) => journeyApi.restore(base.id, base.revision, collection.id), collection.mode);
       setPositions((old) => ({ ...old, [collection.mode]: {} }));
       setDrafts((old) => ({ ...old, [collection.mode]: collection.narrative }));
+      setStoryStale((old) => ({ ...old, [collection.mode]: false }));
       setItineraryOpen(true);
     }, collection.mode);
   }
@@ -178,10 +187,10 @@ export default function JourneyApp() {
       mode={mode} session={session} busy={busy} aiPending={aiPending} error={error}
       objects={objects} selectedId={selectedId} onSelect={setSelectedId} onMove={move}
       itineraryOpen={itineraryOpen} onCloseItinerary={() => setItineraryOpen(false)}
-      narrative={drafts[mode]} onNote={keepNote} onMemory={addMemory} onMode={start}
-      onPin={(id, pinned) => { void journey.enqueue(async (_base, write) => { await write({ type: "pin", fragmentId: id, pinned }); }); }}
-      onChooseReading={(id) => { void journey.enqueue(async (_base, write) => { await write({ type: "choose_reading", readingId: id }); }); }}
-      onNarrative={createNarrative} onNarrativeEdit={(text) => setDrafts((old) => ({ ...old, [mode]: text }))} onSave={save}
+      narrative={drafts[mode]} narrativeStale={storyStale[mode]} onNote={keepNote} onMemory={addMemory} onMode={start}
+      onPin={(id, pinned) => { const target = mode; void journey.enqueue(async (_base, write) => { await write({ type: "pin", fragmentId: id, pinned }); setStoryStale((old) => ({ ...old, [target]: true })); }); }}
+      onChooseReading={(id) => { const target = mode; void journey.enqueue(async (_base, write) => { await write({ type: "choose_reading", readingId: id }); setStoryStale((old) => ({ ...old, [target]: true })); }); }}
+      onNarrative={createNarrative} onNarrativeEdit={(text) => { setDrafts((old) => ({ ...old, [mode]: text })); setStoryStale((old) => ({ ...old, [mode]: false })); }} onSave={save}
     />}
     {page !== "table" && <footer className="page-footer"><span>Little objects. Shared journeys.</span><span>Made to be picked up <span aria-hidden="true">↗</span></span></footer>}
   </div>;

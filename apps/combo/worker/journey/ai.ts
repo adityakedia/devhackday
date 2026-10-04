@@ -133,6 +133,15 @@ export async function interpretAi(
           type: "array",
           items: objectSchema({ fragmentIds: supportingIds, explanation: textSchema }),
         },
+        experience: objectSchema({
+          title: textSchema,
+          summary: textSchema,
+          steps: {
+            type: "array",
+            minItems: 1,
+            items: objectSchema({ title: textSchema, description: textSchema, fragmentIds: supportingIds }),
+          },
+        }),
       }),
     },
     deltaExplanation: textSchema,
@@ -158,7 +167,7 @@ export async function interpretAi(
     env,
     "journey_interpretation",
     schema,
-    "Offer two or three distinct, evidence-linked readings with unique reading IDs. Explain the actual change from the previous interpretation using only the supplied new events. When a previous interpretation exists and there are no new events, say the collection is unchanged. Without a previous interpretation, describe the emerging direction. Do not infer a change that was not made. Supply one useful, optional question to help the person develop the collection. Assign fragmentThemes once for EACH current fragment, with unique fragment IDs. Derive those themes from that fragment's personal note in preference to generic object associations. For a bare object, use its original tags where appropriate; for ambiguous or unsupported themes, return no tags. Use only the allowed catalog tags. These themes describe interests or experience associations, never personality or inferred factual memories. Do not derive per-fragment themes from group labels, other fragments, or prior outputs: each assignment must be grounded in that fragment's own note or bare-object metadata.",
+    "Offer two or three distinct, evidence-linked readings with unique reading IDs. EACH reading must include an experience with a meaningful ordered flow of steps, curated around that reading rather than collection insertion order. Cover ALL current fragments across the steps, and combine related objects where meaningful. Use actual selected souvenirs, personal notes, pins and user-written groups to construct this flow. Explain why the order and transitions make sense in step descriptions. For planning, suggest aspirational experiences or activities with conditional language; do not invent bookings, opening hours, durations, travel times or an optimized route. For reflection, arrange supplied memories into a thematic sequence; never invent chronology or claim bare souvenirs establish events. Explain the actual change from the previous interpretation using only the supplied new events. When a previous interpretation exists and there are no new events, say the collection is unchanged. Without a previous interpretation, describe the emerging direction. Do not infer a change that was not made. Supply one useful, optional question to help the person develop the collection. Assign fragmentThemes once for EACH current fragment, with unique fragment IDs. Derive those themes from that fragment's personal note in preference to generic object associations. For a bare object, use its original tags where appropriate; for ambiguous or unsupported themes, return no tags. Use only the allowed catalog tags. These themes describe interests or experience associations, never personality or inferred factual memories. Do not derive per-fragment themes from group labels, other fragments, or prior outputs: each assignment must be grounded in that fragment's own note or bare-object metadata.",
     {
       ...data,
       relationshipSummary: summary,
