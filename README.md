@@ -8,6 +8,10 @@ A pnpm monorepo for React apps hosted on Cloudflare Workers, with Neon serverles
 - `packages/db`: shared Neon HTTP database client, for server code only.
 - `tsconfig.base.json`: shared TypeScript settings.
 
+## Requirements
+
+Combo's product requirements are in [Combinatronics Travel MVP](docs/combo-requirements.md), covering Planning and Reflection modes, the shared interaction model, AI responsibilities, and MVP scope.
+
 ## Local development
 
 Use Node.js 22.12+ and pnpm 10.34.5. Run all dependency installs from the workspace root:

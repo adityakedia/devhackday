@@ -1,1 +1,5 @@
 DATABASE_URL="postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require"
+
+# Optional: required only when requesting the AI engine.
+# OPENAI_API_KEY="your-api-key"
+OPENAI_MODEL="gpt-6-luna"
